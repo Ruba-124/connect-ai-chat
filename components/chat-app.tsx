@@ -224,15 +224,20 @@ useEffect(() => {
             })
           }
 
-          await loadConversations(currentUser.id)
-          const isOpen = tabRef.current === "chats" && activeIdRef.current === msg.conversation_id
-          if (isOpen) {
-            await loadMessages(msg.conversation_id)
-          } else {
-            setConvos((prev) => prev.map((c) =>
-              c.id === msg.conversation_id ? { ...c, unread: (c.unread || 0) + 1 } : c
-            ))
-          }
+         await loadConversations(currentUser.id)
+
+// Always inject the new message into local state immediately —
+// don't gate this behind isOpen, since stale refs/timing can make
+// that check unreliable and leave the receiver's bubble missing
+// until a manual refresh.
+await loadMessages(msg.conversation_id)
+
+const isOpen = tabRef.current === "chats" && activeIdRef.current === msg.conversation_id
+if (!isOpen) {
+  setConvos((prev) => prev.map((c) =>
+    c.id === msg.conversation_id ? { ...c, unread: (c.unread || 0) + 1 } : c
+  ))
+}
         }
       ).subscribe((status) => console.log("[DEBUG] messages-insert subscribe status:", status))
     return () => { supabase.removeChannel(channel) }
