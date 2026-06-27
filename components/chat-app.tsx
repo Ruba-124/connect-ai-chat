@@ -193,15 +193,18 @@ export function ChatApp() {
   }
 
   // ---- Realtime: INSERT ----
-  useEffect(() => {
-    if (!user) return
-    const channel = supabase
-      .channel("messages-insert-" + user.id)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages" },
-        async (payload) => {
-          const msg = payload.new as any
-          const currentUser = userRef.current
-          if (msg.receiver_id !== currentUser?.id) return
+  // ---- Realtime: INSERT ----
+useEffect(() => {
+  if (!user) return
+  console.log("[DEBUG] Setting up messages-insert channel for user:", user.id)
+  const channel = supabase
+    .channel("messages-insert-" + user.id)
+    .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages" },
+      async (payload) => {
+        console.log("[DEBUG] INSERT event fired:", payload)
+        const msg = payload.new as any
+        const currentUser = userRef.current
+        if (msg.receiver_id !== currentUser?.id) return
 
           const { data: deliveredRows, error: deliverError } = await supabase
             .from("messages")
@@ -231,7 +234,7 @@ export function ChatApp() {
             ))
           }
         }
-      ).subscribe()
+      ).subscribe((status) => console.log("[DEBUG] messages-insert subscribe status:", status))
     return () => { supabase.removeChannel(channel) }
   }, [user])
 
