@@ -193,18 +193,15 @@ export function ChatApp() {
   }
 
   // ---- Realtime: INSERT ----
-  // ---- Realtime: INSERT ----
-useEffect(() => {
-  if (!user) return
-  console.log("[DEBUG] Setting up messages-insert channel for user:", user.id)
-  const channel = supabase
-    .channel("messages-insert-" + user.id)
-    .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages" },
-      async (payload) => {
-        console.log("[DEBUG] INSERT event fired:", payload)
-        const msg = payload.new as any
-        const currentUser = userRef.current
-        if (msg.receiver_id !== currentUser?.id) return
+  useEffect(() => {
+    if (!user) return
+    const channel = supabase
+      .channel("messages-insert-" + user.id)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages" },
+        async (payload) => {
+          const msg = payload.new as any
+          const currentUser = userRef.current
+          if (msg.receiver_id !== currentUser?.id) return
 
           const { data: deliveredRows, error: deliverError } = await supabase
             .from("messages")
@@ -224,22 +221,24 @@ useEffect(() => {
             })
           }
 
-         await loadConversations(currentUser.id)
+          // CRITICAL ORDER: load this conversation's messages FIRST and let
+          // it fully finish before refreshing the broader conversation list.
+          // Doing it the other way around lets loadConversations()'s own
+          // setConvos call win the race and overwrite/clobber the message
+          // we just received, which is what caused the "needs refresh" bug.
+          await loadMessages(msg.conversation_id)
 
-// Always inject the new message into local state immediately —
-// don't gate this behind isOpen, since stale refs/timing can make
-// that check unreliable and leave the receiver's bubble missing
-// until a manual refresh.
-await loadMessages(msg.conversation_id)
+          const isOpen = tabRef.current === "chats" && activeIdRef.current === msg.conversation_id
+          if (!isOpen) {
+            setConvos((prev) => prev.map((c) =>
+              c.id === msg.conversation_id ? { ...c, unread: (c.unread || 0) + 1 } : c
+            ))
+          }
 
-const isOpen = tabRef.current === "chats" && activeIdRef.current === msg.conversation_id
-if (!isOpen) {
-  setConvos((prev) => prev.map((c) =>
-    c.id === msg.conversation_id ? { ...c, unread: (c.unread || 0) + 1 } : c
-  ))
-}
+          // Now safe to refresh sidebar-level metadata for everything else.
+          await loadConversations(currentUser.id)
         }
-      ).subscribe((status) => console.log("[DEBUG] messages-insert subscribe status:", status))
+      ).subscribe()
     return () => { supabase.removeChannel(channel) }
   }, [user])
 
@@ -366,13 +365,21 @@ if (!isOpen) {
           const msgs = messagesByConvo.get(conversation.id) || []
           const lastMsg = msgs[msgs.length - 1]
           const unreadCount = msgs.filter((m: any) => m.receiver_id === userId && !m.read_at).length
-          const mappedMsgs = msgs.map((m: any) => ({
-            id: m.id, text: m.message,
-            sender: m.sender_id === userId ? "me" : "them",
-            time: new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-            status: m.read_at ? "seen" : m.delivered_at ? "delivered" : "sent",
-            fileUrl: m.file_url, fileName: m.file_name, fileType: m.file_type,
-          }))
+
+          // Preserve the freshest local messages array for this conversation
+          // instead of always rebuilding it here — loadMessages() is the
+          // single source of truth for the active conversation's message
+          // list, so this function should not stomp it.
+          const mappedMsgs = existing?.messages?.length
+            ? existing.messages
+            : msgs.map((m: any) => ({
+                id: m.id, text: m.message,
+                sender: m.sender_id === userId ? "me" : "them",
+                time: new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+                status: m.read_at ? "seen" : m.delivered_at ? "delivered" : "sent",
+                fileUrl: m.file_url, fileName: m.file_name, fileType: m.file_type,
+              }))
+
           return {
             id: conversation.id,
             name: nameMap.get(otherId) || existing?.name || "Contact",
@@ -525,7 +532,6 @@ if (!isOpen) {
   // ── Full-width header (spans sidebar + panel) ──────────────────────────────
   const header = (
     <header className="flex h-14 w-full shrink-0 items-center justify-between border-b border-sidebar-border bg-sidebar px-4">
-      {/* Left — brand */}
       <div className="flex items-center gap-2">
         <div className="flex size-8 items-center justify-center rounded-xl bg-primary text-primary-foreground">
           <MessagesSquare className="size-4" />
@@ -533,7 +539,6 @@ if (!isOpen) {
         <span className="text-base font-semibold tracking-tight">ConnectAI</span>
       </div>
 
-      {/* Right — controls */}
       <div className="flex items-center gap-2 md:gap-3">
         {user ? (
           <>
@@ -652,17 +657,14 @@ if (!isOpen) {
   // ── DESKTOP ─────────────────────────────────────────────────────────────────
   return (
     <main className="relative flex h-dvh w-full flex-col overflow-hidden bg-background text-foreground">
-      {/* Full-width header at the very top */}
       {header}
       {contactsDropdown}
 
-      {/* Below header: sidebar + chat side by side */}
       <div className="flex flex-1 overflow-hidden">
         <aside className="hidden w-80 shrink-0 border-r border-sidebar-border md:block">
           {sidebarEl}
         </aside>
 
-        {/* Slide-over for narrow screens */}
         <div className={cn("fixed inset-0 z-50 md:hidden", sidebarOpen ? "pointer-events-auto" : "pointer-events-none")}>
           <div
             className={cn("absolute inset-0 bg-background/70 backdrop-blur-sm transition-opacity", sidebarOpen ? "opacity-100" : "opacity-0")}
