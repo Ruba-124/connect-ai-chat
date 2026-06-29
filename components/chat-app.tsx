@@ -215,37 +215,18 @@ export function ChatApp() {
             return
           }
 
-          const { data: deliveredRows, error: deliverError } = await supabase
-            .from("messages")
-            .update({ delivered_at: new Date().toISOString() })
-            .eq("id", msg.id).is("delivered_at", null).select("id")
-
-          if (deliverError) {
-            console.error("[TICK] Failed to mark delivered:", deliverError)
-          } else if (deliveredRows && deliveredRows.length > 0) {
-            await new Promise<void>((resolve) => {
-              const bc = supabase.channel(`ticks-${msg.conversation_id}`)
-              bc.subscribe(async (status) => {
-                if (status === "SUBSCRIBED") {
-                  await bc.send({ type: "broadcast", event: "delivered", payload: { messageId: msg.id } })
-                  await supabase.removeChannel(bc)
-                  resolve()
-                }
-              })
-            })
-          }
-
-          // FIX: Build and insert the message directly from the realtime
-          // payload instead of immediately re-querying the DB. A fresh
-          // SELECT right after INSERT can race with Postgres replication
-          // and miss the very row that triggered this event — that race
-          // is what caused "works after refresh, not live" symptom.
+          // FIX: Push the message into UI state FIRST, before doing any
+          // side-effect work (marking delivered, broadcasting ticks).
+          // Previously the delivered-broadcast await could hang silently
+          // (channel never reaching SUBSCRIBED), which blocked execution
+          // and meant the message never reached the UI at all — this is
+          // why the payload arrived but the chat panel never updated.
           const newMsg = {
             id: msg.id,
             text: msg.message,
             sender: msg.sender_id === currentUser?.id ? "me" : "them",
             time: new Date(msg.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-            status: msg.read_at ? "seen" : "delivered", // we just marked delivered above
+            status: "delivered",
             fileUrl: msg.file_url,
             fileName: msg.file_name,
             fileType: msg.file_type,
@@ -260,7 +241,6 @@ export function ChatApp() {
                 c.id === msg.conversation_id
                   ? {
                       ...c,
-                      // avoid duplicate if it's somehow already there
                       messages: c.messages.some((m) => m.id === newMsg.id)
                         ? c.messages
                         : [...c.messages, newMsg],
@@ -271,7 +251,6 @@ export function ChatApp() {
                   : c
               )
             }
-            // Conversation not in state yet (first message ever) — create it
             return [...prev, {
               id: msg.conversation_id, name: "Contact", avatar: "", color: "3b82f6",
               online: true, lastMessage: newMsg.text, lastMessageAt: msg.created_at,
@@ -279,19 +258,49 @@ export function ChatApp() {
             }]
           })
 
-          // If this conversation is the one currently open, mark it seen
-          // (this also fires the "seen" broadcast back to the sender)
           const isOpen = tabRef.current === "chats" && activeIdRef.current === msg.conversation_id
-          if (isOpen) {
-            await loadMessages(msg.conversation_id)
-          } else {
+          if (!isOpen) {
             setConvos((prev) => prev.map((c) =>
               c.id === msg.conversation_id ? { ...c, unread: (c.unread || 0) + 1 } : c
             ))
           }
 
-          // Refresh sidebar-level metadata for everything else (safe now —
-          // it won't clobber the message we just pushed directly above)
+          // ---- Secondary side effects (non-blocking for UI) ----
+          // Mark delivered in DB
+          const { data: deliveredRows, error: deliverError } = await supabase
+            .from("messages")
+            .update({ delivered_at: new Date().toISOString() })
+            .eq("id", msg.id).is("delivered_at", null).select("id")
+
+          if (deliverError) {
+            console.error("[TICK] Failed to mark delivered:", deliverError)
+          } else if (deliveredRows && deliveredRows.length > 0) {
+            // FIX: timeout safeguard — never let this hang the rest of the
+            // handler if the broadcast channel doesn't subscribe quickly
+            await Promise.race([
+              new Promise<void>((resolve) => {
+                const bc = supabase.channel(`ticks-${msg.conversation_id}`)
+                bc.subscribe(async (status) => {
+                  if (status === "SUBSCRIBED") {
+                    await bc.send({ type: "broadcast", event: "delivered", payload: { messageId: msg.id } })
+                    await supabase.removeChannel(bc)
+                    resolve()
+                  }
+                })
+              }),
+              new Promise<void>((resolve) => setTimeout(() => {
+                console.warn("[TICK] delivered broadcast subscribe timed out, continuing anyway")
+                resolve()
+              }, 3000)),
+            ])
+          }
+
+          // If this conversation is open, also mark it as read/seen
+          if (isOpen) {
+            await loadMessages(msg.conversation_id)
+          }
+
+          // Refresh sidebar-level metadata for everything else
           await loadConversations(currentUser.id)
         }
       ).subscribe((status) => {
