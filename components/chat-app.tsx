@@ -235,15 +235,63 @@ export function ChatApp() {
             })
           }
 
-          await loadMessages(msg.conversation_id)
+          // FIX: Build and insert the message directly from the realtime
+          // payload instead of immediately re-querying the DB. A fresh
+          // SELECT right after INSERT can race with Postgres replication
+          // and miss the very row that triggered this event — that race
+          // is what caused "works after refresh, not live" symptom.
+          const newMsg = {
+            id: msg.id,
+            text: msg.message,
+            sender: msg.sender_id === currentUser?.id ? "me" : "them",
+            time: new Date(msg.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+            status: msg.read_at ? "seen" : "delivered", // we just marked delivered above
+            fileUrl: msg.file_url,
+            fileName: msg.file_name,
+            fileType: msg.file_type,
+          }
 
+          console.log("[TICK] Pushing message directly into state:", newMsg)
+
+          setConvos((prev) => {
+            const exists = prev.some((c) => c.id === msg.conversation_id)
+            if (exists) {
+              return prev.map((c) =>
+                c.id === msg.conversation_id
+                  ? {
+                      ...c,
+                      // avoid duplicate if it's somehow already there
+                      messages: c.messages.some((m) => m.id === newMsg.id)
+                        ? c.messages
+                        : [...c.messages, newMsg],
+                      lastMessage: newMsg.text || (newMsg.fileName ? `📎 ${newMsg.fileName}` : ""),
+                      lastMessageAt: msg.created_at,
+                      timestamp: newMsg.time,
+                    }
+                  : c
+              )
+            }
+            // Conversation not in state yet (first message ever) — create it
+            return [...prev, {
+              id: msg.conversation_id, name: "Contact", avatar: "", color: "3b82f6",
+              online: true, lastMessage: newMsg.text, lastMessageAt: msg.created_at,
+              timestamp: newMsg.time, unread: 0, messages: [newMsg], isAI: false,
+            }]
+          })
+
+          // If this conversation is the one currently open, mark it seen
+          // (this also fires the "seen" broadcast back to the sender)
           const isOpen = tabRef.current === "chats" && activeIdRef.current === msg.conversation_id
-          if (!isOpen) {
+          if (isOpen) {
+            await loadMessages(msg.conversation_id)
+          } else {
             setConvos((prev) => prev.map((c) =>
               c.id === msg.conversation_id ? { ...c, unread: (c.unread || 0) + 1 } : c
             ))
           }
 
+          // Refresh sidebar-level metadata for everything else (safe now —
+          // it won't clobber the message we just pushed directly above)
           await loadConversations(currentUser.id)
         }
       ).subscribe((status) => {
