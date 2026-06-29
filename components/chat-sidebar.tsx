@@ -7,14 +7,7 @@ import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
 import type { Conversation } from "@/lib/chat-data"
-import {
-  Bot,
-  MessagesSquare,
-  Search,
-  X,
-  MoreVertical,
-  Trash2,
-} from "lucide-react"
+import { Bot, MessagesSquare, Search, MoreVertical, Trash2 } from "lucide-react"
 
 type Tab = "chats" | "ai"
 
@@ -42,7 +35,6 @@ export function Sidebar({
   onTabChange,
   search,
   onSearch,
-  onClose,
   aiChats,
   createNewAIChat,
   openAIChat,
@@ -58,11 +50,8 @@ export function Sidebar({
   return (
     <div className="flex h-full w-full flex-col bg-sidebar">
 
-      {/* ── Header ── */}
-      
-
-      {/* ── Search ── */}
-      <div className="p-3">
+      {/* Search — no logo/header here, the app header owns that */}
+      <div className="p-3 pt-3">
         <div className="relative">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -75,7 +64,7 @@ export function Sidebar({
         </div>
       </div>
 
-      {/* ── Tabs ── */}
+      {/* Tabs */}
       <div className="flex gap-1 px-3 pb-2">
         <TabButton active={tab === "chats"} onClick={() => onTabChange("chats")}>
           <MessagesSquare className="size-4" />
@@ -87,7 +76,7 @@ export function Sidebar({
         </TabButton>
       </div>
 
-      {/* ── Chats list ── */}
+      {/* Chats list */}
       {tab === "chats" && (
         <ScrollArea className="flex-1 px-2">
           <div className="flex flex-col gap-1 pb-3">
@@ -96,7 +85,6 @@ export function Sidebar({
                 No conversations yet
               </p>
             )}
-
             {filtered.map((c) => {
               const isActive = c.id === activeId
               const initials = c.name?.[0]?.toUpperCase() || "?"
@@ -104,16 +92,11 @@ export function Sidebar({
               const isMine = lastMsg?.sender === "me"
               const status = (lastMsg as any)?.status
               const tick = isMine
-                ? status === "seen"
-                  ? "✓✓ "        // blue ticks shown via color below
-                  : status === "delivered"
-                  ? "✓✓ "
-                  : "✓ "
+                ? status === "seen" ? "✓✓ "
+                : status === "delivered" ? "✓✓ "
+                : "✓ "
                 : ""
-              const tickColor =
-                isMine && status === "seen"
-                  ? "text-blue-400"
-                  : "text-muted-foreground"
+              const tickColor = isMine && status === "seen" ? "text-blue-400" : "text-muted-foreground"
 
               return (
                 <button
@@ -125,7 +108,6 @@ export function Sidebar({
                     isActive ? "bg-primary/10" : "hover:bg-sidebar-accent"
                   )}
                 >
-                  {/* Avatar + online dot */}
                   <div className="relative shrink-0">
                     <Avatar className="size-10">
                       <AvatarImage src={c.avatar || undefined} alt={c.name} />
@@ -141,7 +123,6 @@ export function Sidebar({
                     )}
                   </div>
 
-                  {/* Name + last message + tick + badge */}
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-2">
                       <p className="truncate text-sm font-medium">{c.name}</p>
@@ -151,18 +132,13 @@ export function Sidebar({
                         </span>
                       )}
                     </div>
-
                     <div className="flex items-center justify-between gap-2">
                       <p className="truncate text-xs text-muted-foreground">
                         {typingConvoId === c.id ? (
                           <span className="text-primary">typing...</span>
                         ) : (
                           <>
-                            {tick && (
-                              <span className={cn("mr-0.5", tickColor)}>
-                                {tick}
-                              </span>
-                            )}
+                            {tick && <span className={cn("mr-0.5", tickColor)}>{tick}</span>}
                             {c.lastMessage || "No messages yet"}
                           </>
                         )}
@@ -181,7 +157,7 @@ export function Sidebar({
         </ScrollArea>
       )}
 
-      {/* ── AI chats list ── */}
+      {/* AI chats list */}
       {tab === "ai" && (
         <ScrollArea className="flex-1 px-3 pb-2">
           <button
@@ -190,44 +166,27 @@ export function Sidebar({
           >
             + New AI Chat
           </button>
-
           {aiChats.map((chat) => (
-            <div
-              key={chat.id}
-              className="relative mb-2 rounded-lg hover:bg-slate-800"
-            >
-              <div
-                onClick={() => openAIChat(chat.id)}
-                className="cursor-pointer p-2 pr-10"
-              >
+            <div key={chat.id} className="relative mb-2 rounded-lg hover:bg-slate-800">
+              <div onClick={() => openAIChat(chat.id)} className="cursor-pointer p-2 pr-10">
                 <div className="truncate text-sm font-medium">{chat.title}</div>
                 <div className="text-xs text-slate-400">
                   {new Date(chat.created_at).toLocaleDateString()}
                 </div>
               </div>
-
-              {/* Three-dot menu */}
               <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  setMenuOpen(menuOpen === chat.id ? null : chat.id)
-                }}
+                onClick={(e) => { e.stopPropagation(); setMenuOpen(menuOpen === chat.id ? null : chat.id) }}
                 className="absolute right-2 top-2 rounded p-1 hover:bg-slate-700"
               >
                 <MoreVertical size={18} />
               </button>
-
               {menuOpen === chat.id && (
                 <div className="absolute right-2 top-10 z-50 rounded-lg border bg-slate-900 shadow-lg">
                   <button
-                    onClick={() => {
-                      deleteAIChat(chat.id)
-                      setMenuOpen(null)
-                    }}
+                    onClick={() => { deleteAIChat(chat.id); setMenuOpen(null) }}
                     className="flex w-full items-center gap-2 px-4 py-2 text-sm text-red-500 hover:bg-slate-800"
                   >
-                    <Trash2 size={16} />
-                    Delete Chat
+                    <Trash2 size={16} /> Delete Chat
                   </button>
                 </div>
               )}
@@ -240,13 +199,9 @@ export function Sidebar({
 }
 
 function TabButton({
-  active,
-  onClick,
-  children,
+  active, onClick, children,
 }: {
-  active: boolean
-  onClick: () => void
-  children: React.ReactNode
+  active: boolean; onClick: () => void; children: React.ReactNode
 }) {
   return (
     <button
@@ -254,9 +209,7 @@ function TabButton({
       onClick={onClick}
       className={cn(
         "flex flex-1 items-center justify-center gap-1.5 rounded-lg py-2 text-sm font-medium transition-colors",
-        active
-          ? "bg-primary text-primary-foreground"
-          : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+        active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
       )}
     >
       {children}
