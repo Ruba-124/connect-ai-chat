@@ -59,7 +59,9 @@ export function ChatApp() {
   // ---- Auth/init ----
   useEffect(() => {
     async function loadUserAndProfile() {
-      const { data: { user } } = await supabase.auth.getUser()
+      console.log("[TICK] Fetching auth user...")
+      const { data: { user }, error: authError } = await supabase.auth.getUser()
+      console.log("[TICK] Auth result. user:", user?.id ?? "NULL", "error:", authError)
       setUser(user)
       if (user) {
         await loadAIChats(user.id)
@@ -71,6 +73,7 @@ export function ChatApp() {
     }
     loadUserAndProfile()
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event) => {
+      console.log("[TICK] Auth state changed:", event)
       if (event === "SIGNED_IN" || event === "SIGNED_OUT") await loadUserAndProfile()
     })
     return () => subscription.unsubscribe()
@@ -192,23 +195,34 @@ export function ChatApp() {
     )
   }
 
-  // ---- Realtime: INSERT ----
+  // ---- Realtime: INSERT (with diagnostic logs) ----
   useEffect(() => {
-    if (!user) return
+    console.log("[TICK] INSERT effect running. user:", user?.id ?? "NULL")
+    if (!user) {
+      console.log("[TICK] INSERT effect bailing — no user yet")
+      return
+    }
+
     const channel = supabase
       .channel("messages-insert-" + user.id)
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages" },
         async (payload) => {
+          console.log("[TICK] RAW INSERT payload received:", payload)
           const msg = payload.new as any
           const currentUser = userRef.current
-          if (msg.receiver_id !== currentUser?.id) return
+          if (msg.receiver_id !== currentUser?.id) {
+            console.log("[TICK] INSERT ignored — not for me. receiver:", msg.receiver_id, "me:", currentUser?.id)
+            return
+          }
 
           const { data: deliveredRows, error: deliverError } = await supabase
             .from("messages")
             .update({ delivered_at: new Date().toISOString() })
             .eq("id", msg.id).is("delivered_at", null).select("id")
 
-          if (!deliverError && deliveredRows && deliveredRows.length > 0) {
+          if (deliverError) {
+            console.error("[TICK] Failed to mark delivered:", deliverError)
+          } else if (deliveredRows && deliveredRows.length > 0) {
             await new Promise<void>((resolve) => {
               const bc = supabase.channel(`ticks-${msg.conversation_id}`)
               bc.subscribe(async (status) => {
@@ -221,11 +235,6 @@ export function ChatApp() {
             })
           }
 
-          // CRITICAL ORDER: load this conversation's messages FIRST and let
-          // it fully finish before refreshing the broader conversation list.
-          // Doing it the other way around lets loadConversations()'s own
-          // setConvos call win the race and overwrite/clobber the message
-          // we just received, which is what caused the "needs refresh" bug.
           await loadMessages(msg.conversation_id)
 
           const isOpen = tabRef.current === "chats" && activeIdRef.current === msg.conversation_id
@@ -235,10 +244,12 @@ export function ChatApp() {
             ))
           }
 
-          // Now safe to refresh sidebar-level metadata for everything else.
           await loadConversations(currentUser.id)
         }
-      ).subscribe()
+      ).subscribe((status) => {
+        console.log(`[TICK] messages-insert-${user.id} channel status:`, status)
+      })
+
     return () => { supabase.removeChannel(channel) }
   }, [user])
 
@@ -366,10 +377,6 @@ export function ChatApp() {
           const lastMsg = msgs[msgs.length - 1]
           const unreadCount = msgs.filter((m: any) => m.receiver_id === userId && !m.read_at).length
 
-          // Preserve the freshest local messages array for this conversation
-          // instead of always rebuilding it here — loadMessages() is the
-          // single source of truth for the active conversation's message
-          // list, so this function should not stomp it.
           const mappedMsgs = existing?.messages?.length
             ? existing.messages
             : msgs.map((m: any) => ({
@@ -510,15 +517,19 @@ export function ChatApp() {
     const optimisticId = `optimistic-${Date.now()}`
     pushMessage(target.id, { id: optimisticId, text, sender: "me", time: nowTime(), status: "sent", fileUrl: file?.url, fileName: file?.name, fileType: file?.type } as any, file ? (text || file.name) : text)
 
+    console.log("[TICK] Inserting message into Supabase...")
     const { data: inserted, error: msgError } = await supabase
       .from("messages")
       .insert({ conversation_id: target.id, sender_id: user.id, receiver_id: otherUserId, message: text, file_url: file?.url || null, file_name: file?.name || null, file_type: file?.type || null })
       .select().single()
 
     if (msgError) {
+      console.error("[TICK] MESSAGE INSERT ERROR:", msgError)
       setConvos((prev) => prev.map((c) => c.id === target.id ? { ...c, messages: c.messages.filter((m) => m.id !== optimisticId) } : c))
       return
     }
+
+    console.log("[TICK] Message inserted successfully, id:", inserted.id)
 
     setConvos((prev) => prev.map((c) => c.id !== target.id ? c : {
       ...c, messages: c.messages.map((m) => m.id === optimisticId ? { ...m, id: inserted.id, status: "sent" } : m),
